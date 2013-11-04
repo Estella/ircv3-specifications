@@ -1,0 +1,26 @@
+# identify-msg Client Capability Extension
+
+The `identify-msg` capability causes the server to send an "identification"
+prefix in the message parameter of PRIVMSG and NOTICES commands.
+
+The prefix is a single character, `+` if the sender was identified to a
+services account matching their current nickname, or `-` if the sender's
+account name was different or not set at all.
+
+Example (demonstrated using the `account-notify` capability):
+
+    :user ACCOUNT *
+    :user PRIVMSG #atheme :-Hello everyone.
+    :user ACCOUNT user
+    :user PRIVMSG #atheme :+Now I'm logged in.
+    :user NICK loser
+    :loser PRIVMSG #atheme :-I'm still logged in, but my account does not match.
+
+Historical note: There exist pre-IRCv3 servers and clients that implement the
+same extension as `CAPAB IDENTIFY-MSG`. New implementations SHOULD NOT
+implement the CAPAB method.
+
+In fact, this extension is entirely superseded by the newer capabilities
+`account-msg`, `account-notify`, and `extended-join`, which also allow for
+services implementations that have account names different from nicknames. The
+`identify-msg` extension therefore should not be implemented.

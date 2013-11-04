@@ -89,6 +89,14 @@ To submit an extension to the extension registry, please contact us via IRC for 
  * [IRC Version 3.2: `batch` Extension](/extensions/batch-3.2)
  * [IRC Version 3.2: `userhost-in-names` Extension](/extensions/userhost-in-names-3.2)
 
+## Non-IRCv3 extensions
+
+These extensions are considered deprecated and have better replacements, but
+are documented here for completeness, as several programs already implement
+them. New clients and servers should not implement them.
+
+ * [`identify-msg` Extension](/extensions/identify-msg)
+
 # IRCv3.1 Compliant Software
 
 This software is compliant natively; other software may be compliant with extensions.
