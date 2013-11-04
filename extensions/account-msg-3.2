@@ -1,0 +1,37 @@
+# account-msg Client Capability Extension
+
+The `account-msg` capability causes the server to add a message-tag containing
+the command sender's services account to commands sent to the client that has
+requested this capability. It supersedes the `identify-msg` extension.
+
+The tag MUST be named `account`, and contain the sender's current services
+username. If the user is not identified to any services account, an `*` MUST be
+sent.
+
+The tag MUST be added to PRIVMSG and NOTICE commands sent directly to the user
+(i.e. private messages and notices). Also, if the user has "caller ID" enabled
+(e.g. user modes +R or +g in Charybdis), numerics indicating blocked message
+attempts (numeric 718 aka RPL\_UMODEMSG) also MUST be sent with the tag.
+
+The tag SHOULD be added to PRIVMSG, KICK, MODE, NOTICE, TOPIC commands sent to
+a channel.
+
+However, if the server supports `account-notify` and `extended-join`
+capabilities as well as the WHOX extension, AND if the client has these
+capabilities enabled, then it already knows the account names of everyone in
+all channels it is in. Therefore the server is not required to, but still MAY,
+send the tag for channel commands in this situation.
+
+Example (demonstrated using the `account-notify` capability):
+
+    <-- @account=* :user PRIVMSG #atheme :Hello everyone.
+    <-- :user ACCOUNT hax0r
+    <-- @account=hax0r :user PRIVMSG #atheme :Now I'm logged in.
+
+Rationale: This extension was proposed because `identify-msg` does not always
+provide enough information (e.g. the user may be logged into a different
+account), `extended-join` and `account-notify` do not work with private
+messages (unless both participants share at least one channel), and `metadata`
+makes the client actively request someone's account name (i.e. another client
+may send a private message and quickly switch accounts before the local client
+even has a chance to send a metadata query).
