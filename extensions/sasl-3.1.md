@@ -12,17 +12,18 @@ copyrights:
     name: "William Pitcock"
     period: "2009-2012"
     email: "nenolod@dereferenced.org"
+  -
+    name: "Mantas Mikulėnas"
+    period: "2017"
+    email: "grawity@nullroute.eu.org"
 ---
-This document describes the client protocol for SASL authentication, as
-implemented in Charybdis and Atheme.
+This document describes the client protocol for SASL authentication.
 
-The SASL protocol in general is documented in
-[RFC 4422](https://tools.ietf.org/html/rfc4422), along with the 'EXTERNAL'
-mechanism. The most commonly used 'PLAIN' mechanism is documented in
-[RFC 4616](https://tools.ietf.org/html/rfc4616).
+The SASL protocol in general is documented in [RFC 4422][], along with the
+'EXTERNAL' mechanism. The most commonly used 'PLAIN' mechanism is documented in
+[RFC 4616][].
 
-SASL authentication relies on the
-[CAP client capability framework](../core/capability-negotiation-3.1.html).
+SASL authentication relies on the [CAP client capability framework][cap-3.1].
 
 Support for SASL authentication is indicated with the "sasl" capability.
 The client MUST enable the sasl capability before using the AUTHENTICATE
@@ -31,59 +32,130 @@ command defined by this specification.
 ## The AUTHENTICATE command
 
 The AUTHENTICATE command MUST be used before registration is complete and
-with the sasl capability enabled. To enforce the former, it is RECOMMENDED
+with the `sasl` capability enabled. To enforce the former, it is RECOMMENDED
 to only send CAP END when the SASL exchange is completed or needs to be
 aborted. Clients SHOULD be prepared for timeouts at all times during the SASL
 authentication.
 
-There are two forms of the AUTHENTICATE command: initial client message and
-later messages.
+There are two forms of the AUTHENTICATE command: initial client message
+(mechanism selection) and later messages (mechanism challenge/response data).
 
-The initial client message specifies the SASL mechanism to be used. (When this
-is received, the IRCD will attempt to establish an association with a SASL
-agent.) If this fails, a 904 numeric will be sent and the session state remains
-unchanged; the client MAY try another mechanism. Otherwise, the server sends
-a set of regular AUTHENTICATE messages with the initial server response.
-If the chosen mechanism is client-first, the server sends an empty response
-(`AUTHENTICATE +`, as described below).
+### Mechanism selection
+
+The initial client message specifies the SASL mechanism to be used:
 
     initial-authenticate = "AUTHENTICATE" SP mechanism CRLF
 
-A set of regular AUTHENTICATE messages transmits a response from client to
-server or vice versa. The server MAY intersperse other IRC protocol messages
-between the AUTHENTICATE messages of a set.
-The response is encoded in Base64
-([RFC 4648](https://tools.ietf.org/html/rfc4648)), then split to 400-byte
-chunks, and each chunk is sent as a separate `AUTHENTICATE` command. Empty
-(zero-length) responses are sent as `AUTHENTICATE +`. If the last chunk was
-exactly 400 bytes long, it must also be followed by `AUTHENTICATE +` to signal
-end of response.
-The server MAY place a limit on the total length of a response.
+When this is received, the server (or services) will try to start the
+mechanism. If this fails (e.g. if the mechanism is unknown), a 904 numeric will
+be sent and the session state remains unchanged; the client MAY try another
+mechanism.
 
-    regular-authenticate-set = *("AUTHENTICATE" SP 400BASE64 CRLF) "AUTHENTICATE" SP (1*399BASE64 / "+") CRLF
+On success, the server sends one or more regular AUTHENTICATE commands
+containing the initial challenge (possibly empty). The server and client keep
+exchanging the regular AUTHENTICATE commands until authentication succeeds,
+fails, or is aborted.
 
-If the mechanism finishes with the server sending a non-empty challenge (such
-as in SCRAM), clients MUST still send an empty response.
+### Authentication exchange
 
-The client can abort an authentication by sending an asterisk as the data.
-The server will send a 906 numeric.
+An empty message is sent as `AUTHENTICATE +`. Otherwise, the message is encoded
+in Base64 ([RFC 4648][], the encoded output is split to 400-byte chunks, and
+each chunk is sent as a separate `AUTHENTICATE` command.
+
+If the last chunk was exactly 400 bytes long, it must also be followed by an
+empty chunk (i.e. `AUTHENTICATE +`) to signal end of message.
+
+The client MUST buffer received data, and act on the whole message only after
+receiving the final chunk (i.e. shorter than 400 bytes), but SHOULD impose
+limits on the total length of buffered data and abort authentication when the
+limit is reached. (A reasonable limit might be 4 kB.)
+
+The server MAY intersperse AUTHENTICATE messages with other IRC protocol
+messages.
+
+    regular-authenticate-set = *(partial-authenticate) final-authenticate
+
+        partial-authenticate = "AUTHENTICATE" SP 400BASE64 CRLF
+
+          final-authenticate = "AUTHENTICATE" SP (1*399BASE64 / "+") CRLF
+
+### Success, failure, and edge cases
+
+If authentication succeeds, RPL\_LOGGEDIN and RPL\_SASLSUCCESS will be sent.
+
+If authentication fails, ERR\_SASLFAIL or ERR\_SASLTOOLONG will be sent and the
+client MAY start authentication again, beginning with mechanism selection.
+
+(On failure, the server SHOULD additionally send RPL\_SASLMECHS advising the
+client which mechanisms are supported. If this numeric is supported, it MUST be
+sent before ERR\_SASLFAIL.)
+
+The client can abort an authentication by sending an asterisk as the data. The
+server may send ERR\_SASLFAIL or ERR\_SASLABORTED.
 
     authenticate-abort = "AUTHENTICATE" SP "*" CRLF
 
-If authentication fails, a 904 or 905 numeric will be sent and the
-client MAY retry from the `AUTHENTICATE <mechanism>` command.
-If authentication is successful, a 900 and 903 numeric will be sent.
-
 If the client attempts to issue the AUTHENTICATE command after already
-authenticating successfully, the server MUST reject it with a 907 numeric.
+authenticating successfully, the server MUST reject it with ERR\_SASLALREADY.
+(Note that this requirement is removed in `sasl-3.2`.)
 
 If the client completes registration (with CAP END, NICK, USER and any other
 necessary messages) while the SASL authentication is still in progress, the
-server SHOULD abort it and send a 906 numeric, then register the client
+server SHOULD abort it and send ERR\_SASLABORTED, then register the client
 without authentication.
 
-This document does not specify use of the AUTHENTICATE command in
-registered (person) state.
+This document does not specify use of the AUTHENTICATE command in registered
+(person) state.
+
+## SASL overview
+
+### Conversation
+
+Each SASL "conversation" consists of one or more "steps", in which the server
+sends a challenge and the client provides a response.
+
+          CLIENT        SERVER
+
+       mechanism -->
+                    <-- challenge
+        response -->
+                    <-- challenge
+        response -->
+                    <-- success/failure
+
+Each challenge and response are paired. If the server sends a challenge, it
+must not report success/failure in the same step – it must wait for a client
+response before doing so.
+
+For some mechanisms (known as "client-first") the server's initial challenge
+will be empty. In this case, the server MUST still send an empty challenge
+message (which is formatted as `AUTHENTICATE +`). For example, PLAIN works this
+way.
+
+Similarly, some mechanisms finish when the server sends a final message. (For
+example, [SCRAM][RFC 5802] ends with the server sending the "verifier".) In
+this case, the client MUST still send an empty response and the server MUST
+wait for it before indicating success.
+
+In the IRC protocol, a large challenge or response may be split across several
+`AUTHENTICATE` commands; in that case, the entire group of commands still
+belongs to a single "step".
+
+### Authorization
+
+Instead of a single username, SASL defines two separate "authentication" and
+"authorization" identities:
+
+ * The _authentication_ identity (sometimes abbreviated "authcid") is used for
+   verifying credentials – in short, it's the username you log in with.
+
+ * The _authorization_ identity (abbreviated "authzid") is used to determine
+   what access or privileges you obtain – i.e. to impersonate another user, as
+   if using `su` or `sudo`.
+
+If the client doesn't support specifying a separate authorization identity, it
+SHOULD leave the field empty. (Setting both identities to the same value also
+works in practice, although is not guaranteed by the specification.)
 
 ## Example protocol exchange
 
@@ -110,7 +182,7 @@ The client is using the PLAIN SASL mechanism with authentication identity
     S: :jaguar.test 001 jilles :Welcome to the jillestest Internet Relay Chat Network jilles
     (usual welcome messages)
 
-The client is using the SCRAM-SHA-1 mechanism.
+The client is using the SCRAM-SHA-1 mechanism with the same credentials.
 
     C: CAP REQ :sasl
     C: NICK jilles
@@ -200,11 +272,17 @@ between implementations and translations.)_
 
 # Errata
 
-* Previous versions of this specification mentioned that 904 numeric would be
-  used when SASL was aborted. 906 ERR_SASLABORTED should be used when SASL is
-  aborted.
-* Previous versions of this specification did not precisely describe when
-is RPL_SASLMECHS being sent.
+* Previous versions of this specification mentioned that 904 numeric would be used when SASL was aborted. 906 ERR_SASLABORTED should be used when SASL is aborted.
+* Previous versions of this specification did not precisely describe when is RPL_SASLMECHS being sent.
 * Clarified the language how responses are transmitted.
 * Added empty initial server response for client-first mechanisms. This had happened de-facto already.
 * Added empty final client response for certain mechanisms. This had happened de-facto already.
+* Removed mention of IRCD "SASL agents", as it is a server-side implementation detail.
+* Described basic concepts of SASL separately from the low-level protocol description.
+* Mentioned that empty authzid is preferred.
+
+[cap-3.1]: ../core/capability-negotiation-3.1.html
+[RFC 4422]: https://tools.ietf.org/html/rfc4422 "Simple Authentication and Security Layer (SASL)"
+[RFC 4616]: https://tools.ietf.org/html/rfc4616 "The PLAIN Simple Authentication and Security Layer (SASL) Mechanism"
+[RFC 4648]: https://tools.ietf.org/html/rfc4648 "The Base16, Base32, and Base64 Data Encodings"
+[RFC 5802]: https://tools.ietf.org/html/rfc5802 "Salted Challenge Response Authentication Mechanism (SCRAM)"
